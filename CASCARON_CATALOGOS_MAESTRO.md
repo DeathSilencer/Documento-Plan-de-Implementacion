@@ -100,23 +100,30 @@ public class TccompaniaUpdateValidator : AbstractValidator<TccompaniaUpdateDto>
 ---
 
 ### PIEZA 3: Perfil de AutoMapper (`FuncionesGeneralesServer.Shared/AutoMapper`)
-Mapea automáticamente propiedades coincidentes y protege claves o datos de auditoría:
+Mapea automáticamente propiedades coincidentes, protegiendo claves en altas y auditoría:
 ```csharp
 public class TccompaniaProfile : Profile
 {
     public TccompaniaProfile()
     {
-        // CREATE: Mapea DTO hacia entidad nueva
+        // 1. CREATE: Mapea DTO hacia entidad nueva, ignorando la clave primaria (la base o secuencia la asigna)
         CreateMap<TccompaniaCreateDto, Tccompania>()
-            .ForMember(x => x.Idnumcia, opt => opt.Ignore()); // La secuencia o lógica asigna el ID
+            .ForMember(x => x.Idnumcia, opt => opt.Ignore());
 
-        // UPDATE: Mapea DTO sobre entidad existente recuperada de la BD
+        // 2. UPDATE: Mapea DTO sobre entidad existente en el DAL, ignorando clave primaria y auditoría
         CreateMap<TccompaniaUpdateDto, Tccompania>()
-            .ForMember(x => x.Idnumcia, opt => opt.Ignore())   // Clave primaria inmutable
-            .ForMember(x => x.Fechaactualizacion, opt => opt.Ignore()); // Se gestiona en Save
+            .ForMember(x => x.Idnumcia, opt => opt.Ignore())
+            .ForMember(x => x.Fechaactualizacion, opt => opt.Ignore());
 
-        // OUTPUT: Mapea entidad hacia DTO de respuesta
+        // 3. CONSULTA / RESPUESTA: Mapea entidad a DTO y DTO a entidad (NUNCA ignorar clave primaria en DTO -> Entidad)
         CreateMap<Tccompania, Tccompaniadto>();
+        CreateMap<Tccompaniadto, Tccompania>()
+            .ForMember(x => x.Fechaactualizacion, opt => opt.Ignore());
+
+        // 4. DAL UPDATE INTERNO: Copia entre entidades rastreadas ignorando clave primaria y auditoría
+        CreateMap<Tccompania, Tccompania>()
+            .ForMember(x => x.Idnumcia, opt => opt.Ignore())
+            .ForMember(x => x.Fechaactualizacion, opt => opt.Ignore());
     }
 }
 ```
@@ -235,6 +242,10 @@ public static void MapApiCompanias(this IEndpointRouteBuilder routes)
 ### PIEZA 6: Servicio Cliente HTTP (`SistemaBase.Client/ServiciosCliente`)
 - Rutas relativas (`api/Tccompania/Get/{id}`, `api/Tccompania/Insert`).
 - `ObtenerUriGridData()` deriva estrictamente de `_http.BaseAddress`. Cero fallbacks hardcodeados.
+- **DOBLE REGISTRO EN DI (OBLIGATORIO):** Cada servicio HTTP cliente debe registrarse en:
+  1. `SistemaBase/Program.cs` (Host Servidor): `builder.Services.AddHttpClient<ServiceTc{Entidad}>(client => client.BaseAddress = new Uri(apiSettings.UrlBase));`
+  2. `SistemaBase.Client/Program.cs` (Host WebAssembly): `builder.Services.AddScoped<ServiceTc{Entidad}>();`
+  *(Omitir el registro en el servidor provocará `InvalidOperationException` y desconectará el circuito de Blazor al abrir componentes subordinados).*
 
 ```csharp
 public Uri ObtenerUriGridData()
@@ -254,20 +265,15 @@ public Uri ObtenerUriGridData()
 ### PIEZA 7: Vista Principal de Grilla (`{CODIGO}.razor` y `.cs`)
 - Hereda de `PageFuncionBase`. Valida `dataSystem.LogiState.Usuario` en `OnInitializedAsync`, redirigiendo a `Login` si no hay sesión.
 - Conecta `DxGrid` a `GridDevExtremeDataSource<TDto>`.
-- **Toolbar Estándar (`ToolbarOpciones`):** Maneja sinónimos en `OnClickModulo`:
-  - `"ALTA"`, `"NUEVO"`, `"NUEVA"`, `"NEW"` -> Activa edición en modo ALTA.
-  - `"EDITAR"`, `"MODIFICAR"`, `"EDIT"` -> Activa edición con el registro seleccionado.
-  - `"CONSULTAR"`, `"CONSULTA"`, `"VER"` -> Activa modo solo lectura (`consultaItem = true`, `consultaBotCk = false`).
-  - `"BAJA"`, `"ELIMINAR"`, `"BORRAR"`, `"DELETE"` -> Muestra `ModalCuestion`.
-  - `"FILTRO"` / `"FILTRAR"` -> Alterna `ShowFilterRow`.
-  - `"GRUPO"` / `"AGRUPAR"` -> Alterna `ShowGroupPanel`.
-  - `"EXPANDIR"` / `"COLAPSAR"` -> Expande o colapsa filas agrupadas.
-  - `"ACTUALIZAR"` / `"REFRESCAR"` -> Recarga la fuente de datos `GridDataSource`.
-- **Doble Clic:** `RowDoubleClick="OnRowDoubleClick"` abre inmediatamente la edición del registro seleccionado.
+- **Toolbar Estándar (`ToolbarOpciones`):** 
+  - Renderiza tooltips obligatorios (`Tooltip="@(!string.IsNullOrWhiteSpace(o.Tooltip) ? o.Tooltip : o.MenuName)"`).
+  - Utiliza iconos contextuales FontAwesome (`fa-plus`, `fa-pencil-alt`, `fa-trash-alt`, `fa-eye`, etc.).
+  - Incluye fallback automático a las 6 opciones básicas si la función aún no está configurada en la BD.
+  - Maneja sinónimos en `OnClickModulo` (`ALTA`, `EDITAR`, `CONSULTAR`, `BAJA`, `FILTRO`, `GRUPO`, `ACTUALIZAR`) llamando a `StateHasChanged()`.
+- **Doble Clic:** `RowDoubleClick="OnRowDoubleClick"` conmuta inmediatamente a modo EDITAR con el registro pulsado (con fallback a `pRegistroSeleccionado`).
 - **Selección:** `AllowSelectRowByClick="true"` con `@bind-SelectedDataItem="pRegistroSeleccionado"`. **NUNCA mezclar con `FocusedRowEnabled="true"`**.
 - **Confirmación de Borrado:** `ModalCuestion.razor` (Blazor nativo con Bootstrap y `DxButton`, cero riesgo de `JSDisconnectedException`).
 - **Resiliencia:** `CancellationTokenSource _cts` e `IDisposable`. Cancela peticiones en vuelo al desmontar.
-
 
 ```razor
 @page "/CFG1100"
@@ -312,7 +318,11 @@ else
 ### PIEZA 8: Formulario de Captura Maestro-Detalle (`{CODIGO}ABC.razor` y `.cs`)
 - **Encabezado (Arriba):** `DxFormLayout` con inputs concisos (`ReadOnly="@consultaItem"`), botón verde "Aceptar" (`SubmitFormOnClick="true"`) y botón rojo "Salir" (`Click="@OnSalirClick"` que apaga `Editar`).
 - **Detalle Subordinado (Abajo):** `DxFormLayoutTabPages` con pestañas para entidades dependientes (Direcciones, Contactos, APIs, Repositorios).
-- **Regla de Bloqueo en Altas:** En `Accion == "ALTA"`, las pestañas inferiores permanecen bloqueadas informando que se debe pulsar "Aceptar" primero para que la base de datos asigne la clave primaria. Al guardar, conmuta a `EDITAR` y desbloquea el detalle.
+- **Componentes Subordinados de Pestaña:** Cada pestaña aloja un componente independiente (ej. `CFG1111.razor` para Direcciones) que:
+  - Recibe la clave padre (`parIdNumCia`) y el modo de consulta (`consultaItem`).
+  - Tiene su propio `ToolbarOpciones` con tooltips e iconografía FontAwesome.
+  - Tiene su propia grilla `DxGrid` con edición `PopupEditForm` (subordinado CRUD completo).
+- **Regla de Bloqueo en Altas:** En `Accion == "ALTA"`, las pestañas inferiores permanecen bloqueadas con alerta informativa hasta que se guarde el encabezado y PostgreSQL asigne la clave primaria. Al guardar con éxito, conmuta a `EDITAR` y desbloquea el detalle.
 
 ---
 
@@ -325,12 +335,12 @@ Cuando se requiera dar de alta un nuevo catálogo (ej. Sucursales `CFG1200`, Ban
 | **1** | Registrar función y permisos | PostgreSQL: `tcmodulogrupofuncionopciones` y `tcusuarioperfilesfunciones`. |
 | **2** | Crear DTOs desacoplados | `SistemaBase.Client.Shared/DTOs/{Entidad}CreateDto.cs`, `{Entidad}UpdateDto.cs`, `{Entidad}Dto.cs`. |
 | **3** | Crear Validadores FluentValidation | `SistemaBase.Client.Shared/Reglas_de_Validacion/{Entidad}Validators.cs`. |
-| **4** | Crear Perfil AutoMapper | `FuncionesGeneralesServer.Shared/AutoMapper/{Entidad}Profile.cs` (ignorar IDs y auditoría). |
+| **4** | Crear Perfil AutoMapper | `FuncionesGeneralesServer.Shared/AutoMapper/{Entidad}Profile.cs` (no ignorar ID en DTO->Entidad). |
 | **5** | Implementar Servicio DAL | `SistemaBaseDAL/Servicios/{Modulo}/ServicioTc{Entidad}.cs` (usar `IDbContextFactory`, `_mapper.Map` y `AsNoTracking`). |
 | **6** | Crear Endpoints API | `ApiSistemaBase/MapApis/{Modulo}/MapApi{Entidad}.cs` con `.RequireFuncion("CODIGO")`. |
-| **7** | Crear Servicio Cliente HTTP | `SistemaBase.Client/ServiciosCliente/ServiceTc{Entidad}.cs` y registrar en DI (`Program.cs`). |
-| **8** | Crear Página Blazor Principal | `SistemaBase.Client/Pages/{Modulo}/{CODIGO}.razor` y `.cs` (Grilla `DxGrid` paginada en servidor). |
-| **9** | Crear Componente ABC | `SistemaBase.Client/Pages/{Modulo}/{CODIGO}ABC.razor` y `.cs` (Encabezado + Tabs subordinadas). |
+| **7** | Crear Servicio Cliente HTTP y Registrar en DI | `SistemaBase.Client/ServiciosCliente/ServiceTc{Entidad}.cs`. **Doble registro:** en `SistemaBase/Program.cs` (`AddHttpClient`) y `SistemaBase.Client/Program.cs` (`AddScoped`). |
+| **8** | Crear Página Blazor Principal | `SistemaBase.Client/Pages/{Modulo}/{CODIGO}.razor` y `.cs` (Grilla `DxGrid`, `ToolbarOpciones` con tooltips). |
+| **9** | Crear Componente ABC y Pestañas Detalle | `SistemaBase.Client/Pages/{Modulo}/{CODIGO}ABC.razor` y componentes subordinados `{CODIGO_SUB}.razor` con toolbar con tooltips. |
 | **10**| Compilar y Verificar | Ejecutar compilación completa: **0 Errores** y **0 URLs hardcodeadas**. |
 
 ---
