@@ -359,6 +359,7 @@ Cuando se requiera dar de alta un nuevo catálogo (ej. Sucursales `CFG1200`, Ban
 10. ❌ **PROHIBIDO:** Configurar `SizeLimit` global en `AddMemoryCache()` sin que todos los servicios del DAL especifiquen explícitamente `Size` en cada entrada (lanza `InvalidOperationException` en runtime).
 11. ❌ **PROHIBIDO:** Inyectar `dbSistema_BaseContext` como campo privado en servicios del DAL; se debe inyectar únicamente `IDbContextFactory<dbSistema_BaseContext>` y crear el contexto con `await using var context = await _contextFactory.CreateDbContextAsync(ct)`.
 12. ❌ **PROHIBIDO:** Calcular IDs en `PostAsync` con `MaxAsync() + 1` en producción (genera condiciones de carrera); delegar a secuencias o `IDENTITY` de PostgreSQL.
+13. ❌ **PROHIBIDO:** Usar `.WithTags("SistemaBase")` de forma genérica en todos los endpoints de la API; cada catálogo debe agruparse bajo su propio tag temático en Swagger (ej. `.WithTags("Companias")`, `.WithTags("Usuarios")`, etc.) para evitar un listado desordenado y saturado.
 
 ---
 
@@ -368,3 +369,4 @@ Cuando se requiera dar de alta un nuevo catálogo (ej. Sucursales `CFG1200`, Ban
 2. **Resiliencia de Red en PostgreSQL:** La fábrica de DbContext en `Program.cs` de la API debe incluir `.EnableRetryOnFailure(3, TimeSpan.FromSeconds(5), null)` y `.CommandTimeout(60)` para tolerar microcortes.
 3. **Sanitización XSS:** Utilizar la extensión `.NoXss()` en FluentValidation para rechazar strings con posibles scripts o etiquetas HTML.
 4. **Logging Seguro:** Registrar únicamente IDs (`{Idnumcia}`) en logs y advertencias, nunca la entidad completa (`{@Registro}`).
+5. **Agrupación en Swagger por Catálogo:** Cada archivo `MapApi{Catalogo}.cs` debe aplicar `.WithTags("{NombreCatalogo}")` (ej. `"Companias"`, `"Usuarios"`, `"Perfiles"`, `"Iconos"`). De este modo Swagger UI organiza los endpoints en acordeones temáticos colapsables y limpios por catálogo.

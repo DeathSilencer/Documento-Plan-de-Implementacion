@@ -403,5 +403,24 @@ Cuando se requiera dar de alta una nueva pantalla o catálogo (ej. Sucursales `C
 ### G. Generación de Claves Primarias Concurrentes
 - Prohibido en entornos productivos depender de `MaxAsync() + 1` en el código para asignar identificadores. La secuencia o `IDENTITY` nativo de PostgreSQL debe gobernar la generación de claves primarias para garantizar atomicidad ante transacciones concurrentes.
 
+### H. Organización y Agrupación en Swagger por Catálogo (`.WithTags("{Catalogo}")`)
+- **Prohibido:** Jamás utilizar un tag genérico global como `.WithTags("SistemaBase")` para todos los endpoints de la API. Esto satura la documentación y provoca que Swagger UI agrupe decenas de endpoints en una sola sección monolítica y desordenada.
+- **Estándar Obligatorio:** Cada archivo `MapApi{Catalogo}.cs` debe definir un tag temático correspondiente a su catálogo o entidad funcional:
+  ```csharp
+  var group = app.MapGroup("/api").WithTags("Companias").RequireAuthorization().RequireRateLimiting("default");
+  ```
+  O en cada endpoint del catálogo:
+  ```csharp
+  group.MapGet("Tccompania/GridData", ...).WithTags("Companias");
+  ```
+- **Convención de Nombres de Tags:**
+  - `Tccompania` / `Tccompaniasdireccione` -> `.WithTags("Companias")`
+  - `Tcusuario` / `Tcusuarioperfile` -> `.WithTags("Usuarios")`
+  - `Tcperfile` -> `.WithTags("Perfiles")`
+  - `Tcicono` -> `.WithTags("Iconos")`
+  - `Tcsistemabases` -> `.WithTags("Sistema Base")`
+  - `Tccatalogoreporte` -> `.WithTags("Reportes")`
+- **Efecto en Swagger UI:** Swagger renderiza un acordeón independiente, limpio y colapsable por cada catálogo del ERP, manteniendo la API 100% navegable y profesional.
+
 
 
