@@ -341,5 +341,67 @@ Cuando se requiera dar de alta una nueva pantalla o catálogo (ej. Sucursales `C
 | **9** | Crear Formulario ABC y Pestañas Subordinadas | `SistemaBase.Client/Pages/{Modulo}/{CODIGO}ABC.razor` y `.cs` (Encabezado + Tabs subordinadas `{CODIGO_SUBORDINADO}.razor` con `ToolbarOpciones`, tooltips y `DxGrid` modal). |
 | **10**| Compilación y Verificación | Compilar toda la solución con **0 Errores**, **0 URLs hardcodeadas** y verificar en navegador. |
 
+---
+
+## 15. ESTÁNDARES AVANZADOS DE DAL, SEGURIDAD Y RESILIENCIA (AUDITORÍA 2026)
+
+### A. Erradicación Total de `_context` e Inyección Estricta de `IDbContextFactory`
+- **Prohibición Absoluta:** Jamás inyectar `dbSistema_BaseContext` como campo privado (`private readonly dbSistema_BaseContext _context;`) en servicios del DAL. Los contextos scoped o mantenidos como campos acumulan entidades en el `ChangeTracker`, causando fugas de memoria y bloqueos de concurrencia.
+- **Constructor Limpio:** El constructor del servicio solo recibe `IDbContextFactory<dbSistema_BaseContext>`, `IMapper`, `ILogger<T>`, `IMemoryCache` y validadores.
+- **Ámbito Puntual por Operación:** Todo método (`GetsAsyn`, `GetsAllAsyn`, `GetAsync`, `PostAsync`, `PutAsync`, `DeleteAsync`, `ExistsAsync`, `CountAsync`) debe instanciar y liberar su propio contexto:
+  ```csharp
+  await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+  ```
+
+### B. Contrato Estricto del Endpoint `GridData` (GET Obligatorio para DevExpress)
+- **Regla Inquebrantable:** El endpoint de datos para la grilla Blazor `DxGrid` debe responder a **HTTP GET**:
+  ```csharp
+  group.MapGet("{Entidad}/GridData",
+      async (DataSourceLoadOptions loadOptions,
+             IDbContextFactory<dbSistema_BaseContext> contextFactory,
+             CancellationToken ct) =>
+      {
+          try
+          {
+              await using var context = await contextFactory.CreateDbContextAsync(ct);
+              var query = context.Tc{Entidad}.AsNoTracking().Select(...);
+              var resultado = await DataSourceLoader.LoadAsync(query, loadOptions, ct);
+              return Results.Ok(resultado);
+          }
+          catch (OperationCanceledException)
+          {
+              return Results.Empty;
+          }
+      }).WithTags("SistemaBase").RequireFuncion("{CODIGO}");
+  ```
+- **Razón:** El conector cliente `GridDevExtremeDataSource<TDto>` de DevExpress emite solicitudes HTTP GET con parámetros OData/DevExtreme (`skip`, `take`, `sort`, `filter`) y requiere el formato `{ data: [...], totalCount: N }`.
+- **Integraciones Secundarias / GridRequest:** Si clientes móviles o externos envían un objeto de paginación manual (`GridRequest`), este debe exponerse en un endpoint complementario (ej. `group.MapPost("{Entidad}/GridData", ...)` o `{Entidad}/GridDataPaginado`), **NUNCA** sustituyendo el endpoint `GET` de DevExtreme.
+
+### C. Gestión de Memoria en Caché (`IMemoryCache`)
+- **Regla de Tamaño en .NET:** Si se configura `options.SizeLimit` en `builder.Services.AddMemoryCache()`, **toda entrada** en toda la aplicación debe asignar `.SetSize(n)`. Omitirlo lanza `InvalidOperationException` en tiempo de ejecución. Por ello, el registro general se mantiene sin `SizeLimit` global estricto a menos que todos los servicios del DAL especifiquen tamaño.
+- **Operaciones Síncronas:** Las operaciones sobre `IMemoryCache` son locales en RAM. No envolverlas en tareas asíncronas artificiales (`Task.FromResult` / `Task.CompletedTask`). Usar métodos directos: `GetFromCache<T>`, `SetInCache<T>`, `RemoveFromCache`.
+
+### D. Resiliencia de Conexión en Base de Datos (Npgsql)
+- En `Program.cs` de la API, configurar `AddPooledDbContextFactory` con reintentos automáticos para tolerar microcortes de red con PostgreSQL:
+  ```csharp
+  builder.Services.AddPooledDbContextFactory<dbSistema_BaseContext>(options =>
+  {
+      options.UseNpgsql(cadenaNpgsql, npgsqlOptions =>
+      {
+          npgsqlOptions.EnableRetryOnFailure(maxRetryCount: 3, maxRetryDelay: TimeSpan.FromSeconds(5), errorCodesToAdd: null);
+          npgsqlOptions.CommandTimeout(60);
+      });
+  });
+  ```
+
+### E. Sanitización y Prevención XSS (`.NoXss()`)
+- En las reglas de validación de FluentValidation (`{Entidad}Validators.cs`), utilizar la extensión `.NoXss()` en campos de texto libre para bloquear contenido malicioso con scripts o etiquetas HTML sospechosas.
+
+### F. Logging Estructurado y Seguro
+- Registrar identificadores puntuales (`{Idnumcia}`) en vez de la entidad completa (`{@Registro}`) para proteger datos confidenciales y optimizar el almacenamiento de logs.
+
+### G. Generación de Claves Primarias Concurrentes
+- Prohibido en entornos productivos depender de `MaxAsync() + 1` en el código para asignar identificadores. La secuencia o `IDENTITY` nativo de PostgreSQL debe gobernar la generación de claves primarias para garantizar atomicidad ante transacciones concurrentes.
+
 
 

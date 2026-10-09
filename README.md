@@ -355,3 +355,16 @@ Cuando se requiera dar de alta un nuevo catálogo (ej. Sucursales `CFG1200`, Ban
 6. ❌ **PROHIBIDO:** Usar `FocusedRowEnabled="true"` en `DxGrid` al mismo tiempo que `AllowSelectRowByClick="true"`.
 7. ❌ **PROHIBIDO:** Usar `DxPopup` o `DxWindow` desacoplados para la edición de registros en catálogos.
 8. ❌ **PROHIBIDO:** Realizar llamadas asíncronas sin enlazar el `CancellationToken` (`_cts.Token`).
+9. ❌ **PROHIBIDO:** Cambiar el endpoint de `DxGrid` (`/api/{Entidad}/GridData`) a HTTP `POST` o retornar estructuras manuales distintas a las requeridas por `DataSourceLoader` (`{ data: [], totalCount: n }`). DevExpress `GridDevExtremeDataSource` exige HTTP `GET`.
+10. ❌ **PROHIBIDO:** Configurar `SizeLimit` global en `AddMemoryCache()` sin que todos los servicios del DAL especifiquen explícitamente `Size` en cada entrada (lanza `InvalidOperationException` en runtime).
+11. ❌ **PROHIBIDO:** Inyectar `dbSistema_BaseContext` como campo privado en servicios del DAL; se debe inyectar únicamente `IDbContextFactory<dbSistema_BaseContext>` y crear el contexto con `await using var context = await _contextFactory.CreateDbContextAsync(ct)`.
+12. ❌ **PROHIBIDO:** Calcular IDs en `PostAsync` con `MaxAsync() + 1` en producción (genera condiciones de carrera); delegar a secuencias o `IDENTITY` de PostgreSQL.
+
+---
+
+## 6. ESTÁNDARES DE RENDIMIENTO, SEGURIDAD Y CACHÉ (AUDITORÍA 2026)
+
+1. **Gestión de Caché Síncrona:** `IMemoryCache` es local al proceso en memoria RAM; se opera con métodos síncronos directos (`GetFromCache<T>`, `SetInCache<T>`, `RemoveFromCache`), sin envolverlos en falsas tareas asíncronas (`Task.FromResult`).
+2. **Resiliencia de Red en PostgreSQL:** La fábrica de DbContext en `Program.cs` de la API debe incluir `.EnableRetryOnFailure(3, TimeSpan.FromSeconds(5), null)` y `.CommandTimeout(60)` para tolerar microcortes.
+3. **Sanitización XSS:** Utilizar la extensión `.NoXss()` en FluentValidation para rechazar strings con posibles scripts o etiquetas HTML.
+4. **Logging Seguro:** Registrar únicamente IDs (`{Idnumcia}`) en logs y advertencias, nunca la entidad completa (`{@Registro}`).
